@@ -1,9 +1,9 @@
 package com.logistics.model;
 
 import com.logistics.DTO.RegistrationDTOs.*;
-import com.logistics.repositories.*;
 import jakarta.persistence.*;
 import lombok.*;
+import java.util.List;
 
 @Getter
 @Setter
@@ -29,6 +29,10 @@ public class Customer {
 
     @Column(name = "password_hash", nullable = false, length = 100)
     private String passwordHash;
+
+    // Связь один-ко-многим с заказами
+    @OneToMany(mappedBy = "customer", fetch = FetchType.LAZY)
+    private List<Order> orders;
 
     // Конструктор по умолчанию
     public Customer() {}

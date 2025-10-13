@@ -27,6 +27,14 @@ public class UserSession {
         attributes.remove(key);
     }
 
+    public void setAttribute(String key, Object value) {
+        attributes.put(key, value);
+    }
+
+    public Object getAttribute(String key) {
+        return attributes.get(key);
+    }
+
     public void updateLastAccessed() {
         this.lastAccessed = LocalDateTime.now();
     }

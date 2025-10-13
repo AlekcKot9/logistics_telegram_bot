@@ -44,6 +44,18 @@ public class SessionService {
         return session;
     }
 
+    public void updateSessionState(Long chatId, String state) {
+        UserSession session = getSession(chatId);
+        if (session != null) {
+            session.setCurrentState(state);
+        }
+    }
+
+    public String getSessionState(Long chatId) {
+        UserSession session = getSession(chatId);
+        return session != null ? session.getCurrentState() : null;
+    }
+
     public UserSession getSession(Long chatId) {
         UserSession session = sessions.get(chatId);
         if (session != null) {
@@ -59,13 +71,6 @@ public class SessionService {
     public boolean isSessionActive(Long chatId) {
         UserSession session = sessions.get(chatId);
         return session != null && !session.isExpired(sessionTimeoutMinutes);
-    }
-
-    public void updateSessionState(Long chatId, String state) {
-        UserSession session = getSession(chatId);
-        if (session != null) {
-            session.setCurrentState(state);
-        }
     }
 
     private void cleanupExpiredSessions() {

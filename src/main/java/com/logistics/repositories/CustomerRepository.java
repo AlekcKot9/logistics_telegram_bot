@@ -27,5 +27,9 @@ public interface CustomerRepository extends JpaRepository<Customer, Integer> {
             "c.phone LIKE CONCAT('%', :searchTerm, '%')")
     List<Customer> searchCustomers(@Param("searchTerm") String searchTerm);
 
+    @Query("SELECT c FROM Customer c WHERE c.email = :email AND c.passwordHash = :password")
+    Optional<Customer> findByEmailAndPassword(@Param("email") String email,
+                                              @Param("password") String password);
+
     boolean existsByEmail(String email);
 }
