@@ -2,7 +2,7 @@ package com.logistics.model;
 
 import jakarta.persistence.*;
 import lombok.*;
-import java.time.*;
+import java.time.LocalDateTime;
 
 @Getter
 @Setter
@@ -23,15 +23,13 @@ public class Order {
     @Column(name = "status")
     private String status;
 
-    @Column(name = "delivery_address")
+    @Column(name = "delivery_address", columnDefinition = "TEXT")
     private String deliveryAddress;
 
-    // Связь многие-к-одному с Customer
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "customer_id")
     private Customer customer;
 
-    // Связь многие-к-одному с Vehicle
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "vehicle_id")
     private Vehicle vehicle;

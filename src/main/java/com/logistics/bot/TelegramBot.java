@@ -21,6 +21,12 @@ import java.util.List;
 public class TelegramBot extends TelegramLongPollingBot {
 
     @Autowired
+    private OrderService orderService;
+
+    @Autowired
+    private OrderCreationService orderCreationService;
+
+    @Autowired
     private LoginService loginService;
 
     @Autowired
@@ -63,50 +69,6 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private void handleCommands(String text, Long chatId) {
-        switch (text) {
-            case "/start":
-            case "🚀 Старт":
-                startSession(chatId);
-                sendWelcomeMessage(chatId);
-                break;
-            case "/help":
-            case "❓ Помощь":
-                sendHelpMessage(chatId);
-                break;
-            case "/sign":
-            case "📝 Регистрация":
-                if (authService.isAuthenticated(chatId)) {
-                    sendMessage(chatId, "✅ Вы уже вошли в систему. Для выхода используйте /logout");
-                } else {
-                    registrationService.startRegistration(chatId);
-                }
-                break;
-            case "/login":
-            case "🔐 Вход":
-                if (authService.isAuthenticated(chatId)) {
-                    sendMessage(chatId, "✅ Вы уже вошли в систему. Для выхода используйте /logout");
-                } else {
-                    loginService.startLoginProcess(chatId);
-                    sendMessage(chatId, "🔐 Вход в систему\n\nПожалуйста, введите ваш email:");
-                }
-                break;
-            case "/profile":
-            case "👤 Профиль":
-                showUserProfile(chatId);
-                break;
-            case "ℹ️ О боте":
-                sendAboutMessage(chatId);
-                break;
-            case "❌ Отмена":
-                handleCancel(chatId);
-                break;
-            default:
-                sendDefaultMessage(chatId);
-                break;
-        }
-    }
-
 
 
     // Новые методы для обработки логина/логаута
@@ -136,49 +98,6 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private void handleCancel(Long chatId) {
-        if (registrationService.isUserInRegistrationProcess(chatId)) {
-            registrationService.cancelRegistration(chatId);
-            sendMessage(chatId, "❌ Регистрация отменена.");
-        } else if (loginService.isUserInLoginProcess(chatId)) {
-            loginService.cancelLoginProcess(chatId);
-            sendMessage(chatId, "❌ Вход отменен.");
-        } else {
-            sendMessage(chatId, "❌ Нечего отменять.");
-        }
-    }
-
-    private void processMessage(String text, Long chatId) {
-        // Проверяем команды выхода и статуса сессии
-        if ("/logout".equals(text) || "🚪 Выход".equals(text)) {
-            handleLogout(chatId);
-            return;
-        }
-
-        if ("/session".equals(text) || "📊 Статус сессии".equals(text)) {
-            showSessionStatus(chatId);
-            return;
-        }
-
-        // Проверяем активна ли сессия (кроме команды /start)
-        if (!"/start".equals(text) && !"🚀 Старт".equals(text)) {
-            if (!sessionService.isSessionActive(chatId)) {
-                sendSessionExpiredMessage(chatId);
-                return;
-            }
-        }
-
-        // Проверяем процессы (в порядке приоритета)
-        if (registrationService.isUserInRegistrationProcess(chatId)) {
-            registrationService.processInput(chatId, text);
-        } else if (loginService.isUserInLoginProcess(chatId)) {
-            String response = loginService.processLoginInput(chatId, text);
-            sendMessage(chatId, response);
-        } else {
-            // Обрабатываем команды и кнопки
-            handleCommands(text, chatId);
-        }
-    }
 
     private void startSession(Long chatId) {
         sessionService.createSession(chatId);
@@ -329,7 +248,155 @@ public class TelegramBot extends TelegramLongPollingBot {
         sendMessageWithMenu(chatId, helpText);
     }
 
-    // Обновляем метод createMainMenuKeyboard:
+    // Обновите метод processMessage
+    private void processMessage(String text, Long chatId) {
+        // Проверяем команды выхода и статуса сессии
+        if ("/logout".equals(text) || "🚪 Выход".equals(text)) {
+            handleLogout(chatId);
+            return;
+        }
+
+        if ("/session".equals(text) || "📊 Статус сессии".equals(text)) {
+            showSessionStatus(chatId);
+            return;
+        }
+
+        // Проверяем активна ли сессия (кроме команды /start)
+        if (!"/start".equals(text) && !"🚀 Старт".equals(text)) {
+            if (!sessionService.isSessionActive(chatId)) {
+                sendSessionExpiredMessage(chatId);
+                return;
+            }
+        }
+
+        // Проверяем процессы (в порядке приоритета)
+        if (registrationService.isUserInRegistrationProcess(chatId)) {
+            registrationService.processInput(chatId, text);
+        } else if (loginService.isUserInLoginProcess(chatId)) {
+            String response = loginService.processLoginInput(chatId, text);
+            sendMessage(chatId, response);
+        } else if (orderCreationService.isUserInOrderCreationProcess(chatId)) {
+            String response = orderCreationService.processOrderCreationInput(chatId, text);
+            sendMessage(chatId, response);
+        } else {
+            // Обрабатываем команды и кнопки
+            handleCommands(text, chatId);
+        }
+    }
+
+    // Обновите метод handleCommands - добавьте новые команды
+    private void handleCommands(String text, Long chatId) {
+        switch (text) {
+            case "/start":
+            case "🚀 Старт":
+                startSession(chatId);
+                sendWelcomeMessage(chatId);
+                break;
+            case "/help":
+            case "❓ Помощь":
+                sendHelpMessage(chatId);
+                break;
+            case "/sign":
+            case "📝 Регистрация":
+                if (authService.isAuthenticated(chatId)) {
+                    sendMessage(chatId, "✅ Вы уже вошли в систему. Для выхода используйте /logout");
+                } else {
+                    registrationService.startRegistration(chatId);
+                }
+                break;
+            case "/login":
+            case "🔐 Вход":
+                if (authService.isAuthenticated(chatId)) {
+                    sendMessage(chatId, "✅ Вы уже вошли в систему. Для выхода используйте /logout");
+                } else {
+                    loginService.startLoginProcess(chatId);
+                    sendMessage(chatId, "🔐 Вход в систему\n\nПожалуйста, введите ваш email:");
+                }
+                break;
+            case "/profile":
+            case "👤 Профиль":
+                showUserProfile(chatId);
+                break;
+            case "/new_order":
+            case "📦 Новый заказ":
+                handleNewOrder(chatId);
+                break;
+            case "/my_orders":
+            case "📋 Мои заказы":
+                showUserOrders(chatId);
+                break;
+            case "ℹ️ О боте":
+                sendAboutMessage(chatId);
+                break;
+            case "❌ Отмена":
+                handleCancel(chatId);
+                break;
+            default:
+                sendDefaultMessage(chatId);
+                break;
+        }
+    }
+
+    private void handleNewOrder(Long chatId) {
+        if (!authService.isAuthenticated(chatId)) {
+            sendMessage(chatId, "❌ Для создания заказа необходимо войти в систему.");
+            return;
+        }
+
+        orderCreationService.startOrderCreation(chatId);
+        sendMessage(chatId, "📦 Создание нового заказа\n\nПожалуйста, введите адрес доставки:");
+    }
+
+    private void showUserOrders(Long chatId) {
+        if (!authService.isAuthenticated(chatId)) {
+            sendMessage(chatId, "❌ Для просмотра заказов необходимо войти в систему.");
+            return;
+        }
+
+        Customer customer = authService.getAuthenticatedCustomer(chatId);
+        List<Order> orders = orderService.getUserOrders(customer.getCustomerId());
+
+        if (orders.isEmpty()) {
+            sendMessage(chatId, "📦 У вас пока нет заказов.\n\nСоздайте первый заказ с помощью команды /new_order");
+            return;
+        }
+
+        StringBuilder ordersText = new StringBuilder("📋 Ваши заказы:\n\n");
+        for (Order order : orders) {
+            ordersText.append(String.format(
+                    "Заказ #%d\n" +
+                            "• Адрес: %s\n" +
+                            "• Вес: %d кг\n" +
+                            "• Статус: %s\n" +
+                            "• Дата: %s\n\n",
+                    order.getId(),
+                    order.getDeliveryAddress(),
+                    order.getTotalWeight(),
+                    order.getStatus(),
+                    order.getCreateTime()
+            ));
+        }
+
+        sendMessage(chatId, ordersText.toString());
+    }
+
+    // Обновите метод handleCancel
+    private void handleCancel(Long chatId) {
+        if (registrationService.isUserInRegistrationProcess(chatId)) {
+            registrationService.cancelRegistration(chatId);
+            sendMessage(chatId, "❌ Регистрация отменена.");
+        } else if (loginService.isUserInLoginProcess(chatId)) {
+            loginService.cancelLoginProcess(chatId);
+            sendMessage(chatId, "❌ Вход отменен.");
+        } else if (orderCreationService.isUserInOrderCreationProcess(chatId)) {
+            orderCreationService.cancelOrderCreation(chatId);
+            sendMessage(chatId, "❌ Создание заказа отменено.");
+        } else {
+            sendMessage(chatId, "❌ Нечего отменять.");
+        }
+    }
+
+    // Обновите метод createMainMenuKeyboard для авторизованных пользователей
     private ReplyKeyboardMarkup createMainMenuKeyboard(Long chatId) {
         ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
         keyboardMarkup.setSelective(true);
@@ -338,29 +405,41 @@ public class TelegramBot extends TelegramLongPollingBot {
 
         List<KeyboardRow> keyboard = new ArrayList<>();
 
-        // Первый ряд - основные действия
-        KeyboardRow row1 = new KeyboardRow();
         if (authService.isAuthenticated(chatId)) {
-            row1.add("👤 Профиль");
-            row1.add("❓ Помощь");
+            // Меню для авторизованных пользователей
+            KeyboardRow row1 = new KeyboardRow();
+            row1.add("📦 Новый заказ");
+            row1.add("📋 Мои заказы");
+
+            KeyboardRow row2 = new KeyboardRow();
+            row2.add("👤 Профиль");
+            row2.add("❓ Помощь");
+
+            KeyboardRow row3 = new KeyboardRow();
+            row3.add("ℹ️ О боте");
+            row3.add("🚪 Выход");
+
+            keyboard.add(row1);
+            keyboard.add(row2);
+            keyboard.add(row3);
         } else {
+            // Меню для неавторизованных пользователей
+            KeyboardRow row1 = new KeyboardRow();
             row1.add("📝 Регистрация");
             row1.add("🔐 Вход");
+
+            KeyboardRow row2 = new KeyboardRow();
+            row2.add("❓ Помощь");
+            row2.add("ℹ️ О боте");
+
+            KeyboardRow row3 = new KeyboardRow();
+            row3.add("📊 Статус сессии");
+            row3.add("🚀 Старт");
+
+            keyboard.add(row1);
+            keyboard.add(row2);
+            keyboard.add(row3);
         }
-
-        // Второй ряд
-        KeyboardRow row2 = new KeyboardRow();
-        row2.add("ℹ️ О боте");
-        row2.add("🚀 Старт");
-
-        // Третий ряд (управление сессией)
-        KeyboardRow row3 = new KeyboardRow();
-        row3.add("📊 Статус сессии");
-        row3.add("🚪 Выход");
-
-        keyboard.add(row1);
-        keyboard.add(row2);
-        keyboard.add(row3);
 
         keyboardMarkup.setKeyboard(keyboard);
         return keyboardMarkup;
