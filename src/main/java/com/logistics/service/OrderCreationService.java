@@ -217,7 +217,7 @@ public class OrderCreationService {
     }
 
     // Вспомогательные классы
-    private enum OrderCreationState {
+    public enum OrderCreationState {
         AWAITING_ADDRESS,
         AWAITING_WEIGHT,
         AWAITING_CONFIRMATION

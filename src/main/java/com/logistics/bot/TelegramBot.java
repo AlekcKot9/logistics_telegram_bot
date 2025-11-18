@@ -13,6 +13,7 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+import java.util.*;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,6 +33,12 @@ public class TelegramBot extends TelegramLongPollingBot {
     @Autowired
     private AuthService authService;
 
+    @Autowired
+    private AdminService adminService;
+
+    // Добавьте эти константы в начало класса
+    private static final String ADMIN_MODE = "ADMIN_MODE";
+    private final Map<Long, String> adminActionState = new HashMap<>();
     private final RegistrationService registrationService;
     private final MessageSender messageSender;
     private final SessionService sessionService;
@@ -67,6 +74,444 @@ public class TelegramBot extends TelegramLongPollingBot {
 
             processMessage(messageText, chatId);
         }
+    }
+
+    // Обновите метод processMessage
+    private void processMessage(String text, Long chatId) {
+        // Проверяем команды выхода и статуса сессии
+        if ("/logout".equals(text) || "🚪 Выход".equals(text)) {
+            // Если админ в режиме админа, выходим из режима админа
+            if (adminService.isAdminAuthenticated(chatId)) {
+                handleAdminLogout(chatId);
+                return;
+            }
+            handleLogout(chatId);
+            return;
+        }
+
+        // Проверяем активна ли сессия (кроме команды /start)
+        if (!"/start".equals(text) && !"🚀 Старт".equals(text)) {
+            if (!sessionService.isSessionActive(chatId)) {
+                sendSessionExpiredMessage(chatId);
+                return;
+            }
+        }
+
+        // Проверяем процессы (в порядке приоритета)
+        if (adminService.isAdminInLoginProcess(chatId)) {
+            String response = adminService.processAdminLoginInput(chatId, text);
+            sendMessage(chatId, response);
+        } else if (adminService.isAdminAuthenticated(chatId) && adminActionState.containsKey(chatId)) {
+            handleAdminActionInput(chatId, text);
+        } else if (registrationService.isUserInRegistrationProcess(chatId)) {
+            registrationService.processInput(chatId, text);
+        } else if (loginService.isUserInLoginProcess(chatId)) {
+            String response = loginService.processLoginInput(chatId, text);
+            sendMessage(chatId, response);
+        } else if (orderCreationService.isUserInOrderCreationProcess(chatId)) {
+            String response = orderCreationService.processOrderCreationInput(chatId, text);
+            sendMessage(chatId, response);
+        } else {
+            // Обрабатываем команды и кнопки
+            handleCommands(text, chatId);
+        }
+    }
+
+    private void handleAdminLogin(Long chatId) {
+        if (authService.isAuthenticated(chatId)) {
+            sendMessage(chatId, "❌ Вы уже вошли как пользователь. Сначала выйдите (/logout)");
+            return;
+        }
+        if (adminService.isAdminAuthenticated(chatId)) {
+            sendMessage(chatId, "❌ Вы уже вошли как администратор.");
+            return;
+        }
+        adminService.startAdminLogin(chatId);
+        sendMessage(chatId, "🔐 Вход в режим администратора\n\nВведите ваш Admin ID (числовой идентификатор):");
+    }
+
+    private void handleAdminLogout(Long chatId) {
+        adminService.logoutAdmin(chatId);
+        adminActionState.remove(chatId);
+        sendMessage(chatId, "✅ Вы вышли из режима администратора.");
+    }
+
+    private void showAllOrders(Long chatId) {
+        if (!adminService.isAdminAuthenticated(chatId)) {
+            sendMessage(chatId, "❌ Доступ только для администратора.");
+            return;
+        }
+
+        List<Order> orders = adminService.getAllOrders();
+        if (orders.isEmpty()) {
+            sendMessage(chatId, "📦 Заказов нет.");
+            return;
+        }
+
+        StringBuilder ordersText = new StringBuilder("📋 Все заказы:\n\n");
+        for (Order order : orders) {
+            ordersText.append(String.format(
+                    "Заказ #%d\n" +
+                            "• Адрес: %s\n" +
+                            "• Вес: %d кг\n" +
+                            "• Статус: %s\n" +
+                            "• Клиент ID: %d\n" +
+                            "• Транспорт ID: %s\n" +
+                            "• Дата: %s\n\n",
+                    order.getId(),
+                    order.getDeliveryAddress(),
+                    order.getTotalWeight(),
+                    order.getStatus(),
+                    order.getCustomer() != null ? order.getCustomer().getCustomerId() : "N/A",
+                    order.getVehicle() != null ? order.getVehicle().getVehicleId() : "N/A",
+                    order.getCreateTime()
+            ));
+        }
+
+        sendMessage(chatId, ordersText.toString());
+    }
+
+    private void showAllVehicles(Long chatId) {
+        if (!adminService.isAdminAuthenticated(chatId)) {
+            sendMessage(chatId, "❌ Доступ только для администратора.");
+            return;
+        }
+
+        List<Vehicle> vehicles = adminService.getAllVehicles();
+        if (vehicles.isEmpty()) {
+            sendMessage(chatId, "🚗 Транспорта нет.");
+            return;
+        }
+
+        StringBuilder vehiclesText = new StringBuilder("🚗 Весь транспорт:\n\n");
+        for (Vehicle vehicle : vehicles) {
+            vehiclesText.append(String.format(
+                    "Транспорт #%d\n" +
+                            "• Модель: %s\n" +
+                            "• Номер: %s\n" +
+                            "• Грузоподъемность: %.2f т\n" +
+                            "• Статус: %s\n\n",
+                    vehicle.getVehicleId(),
+                    vehicle.getModel(),
+                    vehicle.getLicensePlate(),
+                    vehicle.getCapacityTon(),
+                    vehicle.getStatus()
+            ));
+        }
+
+        sendMessage(chatId, vehiclesText.toString());
+    }
+
+    private void startUpdateOrderStatus(Long chatId) {
+        if (!adminService.isAdminAuthenticated(chatId)) {
+            sendMessage(chatId, "❌ Доступ только для администратора.");
+            return;
+        }
+
+        adminActionState.put(chatId, "AWAITING_ORDER_ID_FOR_STATUS");
+        sendMessage(chatId, "✏️ Изменение статуса заказа\n\nВведите ID заказа:");
+    }
+
+    private void startUpdateVehicleStatus(Long chatId) {
+        if (!adminService.isAdminAuthenticated(chatId)) {
+            sendMessage(chatId, "❌ Доступ только для администратора.");
+            return;
+        }
+
+        adminActionState.put(chatId, "AWAITING_VEHICLE_ID_FOR_STATUS");
+        sendMessage(chatId, "🔄 Изменение статуса транспорта\n\nВведите ID транспорта:");
+    }
+
+    private void handleAdminActionInput(Long chatId, String input) {
+        String actionState = adminActionState.get(chatId);
+
+        if (actionState == null) {
+            sendMessage(chatId, "❌ Неизвестное действие администратора.");
+            return;
+        }
+
+        switch (actionState) {
+            case "AWAITING_ORDER_ID_FOR_STATUS":
+                try {
+                    Integer orderId = Integer.parseInt(input);
+                    Order order = adminService.getOrderById(orderId);
+                    if (order != null) {
+                        adminActionState.put(chatId, "AWAITING_NEW_ORDER_STATUS:" + orderId);
+                        sendMessage(chatId, String.format(
+                                "✏️ Изменение статуса заказа #%d\n\nТекущий статус: %s\n\nВведите новый статус:",
+                                orderId, order.getStatus()
+                        ));
+                    } else {
+                        adminActionState.remove(chatId);
+                        sendMessage(chatId, "❌ Заказ с таким ID не найден.");
+                    }
+                } catch (NumberFormatException e) {
+                    adminActionState.remove(chatId);
+                    sendMessage(chatId, "❌ Неверный формат ID. Должно быть число.");
+                }
+                break;
+
+            case "AWAITING_NEW_ORDER_STATUS":
+                try {
+                    Integer orderId = extractIdFromState(adminActionState.get(chatId));
+                    if (orderId != null && adminService.updateOrderStatus(orderId, input)) {
+                        adminActionState.remove(chatId);
+                        sendMessage(chatId, "✅ Статус заказа успешно обновлен!");
+                    } else {
+                        adminActionState.remove(chatId);
+                        sendMessage(chatId, "❌ Ошибка при обновлении статуса заказа.");
+                    }
+                } catch (NumberFormatException e) {
+                    adminActionState.remove(chatId);
+                    sendMessage(chatId, "❌ Ошибка при обработке ID заказа.");
+                }
+                break;
+
+            case "AWAITING_VEHICLE_ID_FOR_STATUS":
+                try {
+                    Integer vehicleId = Integer.parseInt(input);
+                    Vehicle vehicle = adminService.getVehicleById(vehicleId);
+                    if (vehicle != null) {
+                        adminActionState.put(chatId, "AWAITING_NEW_VEHICLE_STATUS:" + vehicleId);
+                        sendMessage(chatId, String.format(
+                                "🔄 Изменение статуса транспорта #%d\n\nТекущий статус: %s\n\nВведите новый статус:",
+                                vehicleId, vehicle.getStatus()
+                        ));
+                    } else {
+                        adminActionState.remove(chatId);
+                        sendMessage(chatId, "❌ Транспорт с таким ID не найден.");
+                    }
+                } catch (NumberFormatException e) {
+                    adminActionState.remove(chatId);
+                    sendMessage(chatId, "❌ Неверный формат ID. Должно быть число.");
+                }
+                break;
+
+            case "AWAITING_NEW_VEHICLE_STATUS":
+                try {
+                    Integer vehicleId = extractIdFromState(adminActionState.get(chatId));
+                    if (vehicleId != null && adminService.updateVehicleStatus(vehicleId, input)) {
+                        adminActionState.remove(chatId);
+                        sendMessage(chatId, "✅ Статус транспорта успешно обновлен!");
+                    } else {
+                        adminActionState.remove(chatId);
+                        sendMessage(chatId, "❌ Ошибка при обновлении статуса транспорта.");
+                    }
+                } catch (NumberFormatException e) {
+                    adminActionState.remove(chatId);
+                    sendMessage(chatId, "❌ Ошибка при обработке ID транспорта.");
+                }
+                break;
+
+            default:
+                adminActionState.remove(chatId);
+                sendMessage(chatId, "❌ Неизвестное действие администратора.");
+                break;
+        }
+    }
+
+    // Добавьте этот метод в класс TelegramBot
+    private Integer extractIdFromState(String state) {
+        if (state != null && state.contains(":")) {
+            try {
+                return Integer.parseInt(state.split(":")[1]);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    // Обновите метод handleCommands
+    private void handleCommands(String text, Long chatId) {
+        // Команды администратора
+        if (adminService.isAdminAuthenticated(chatId)) {
+            switch (text) {
+                case "/admin_orders":
+                case "📋 Все заказы":
+                    showAllOrders(chatId);
+                    return;
+                case "/admin_vehicles":
+                case "🚗 Весь транспорт":
+                    showAllVehicles(chatId);
+                    return;
+                case "/admin_update_order":
+                case "✏️ Изменить статус заказа":
+                    startUpdateOrderStatus(chatId);
+                    return;
+                case "/admin_update_vehicle":
+                case "🔄 Изменить статус транспорта":
+                    startUpdateVehicleStatus(chatId);
+                    return;
+                case "/admin_logout":
+                case "🚪 Выход":
+                    handleAdminLogout(chatId);
+                    return;
+            }
+        }
+
+        // Обычные команды
+        switch (text) {
+            case "/start":
+            case "🚀 Старт":
+                startSession(chatId);
+                sendWelcomeMessage(chatId);
+                break;
+            case "/help":
+            case "❓ Помощь":
+                sendHelpMessage(chatId);
+                break;
+            case "/sign":
+            case "📝 Регистрация":
+                if (authService.isAuthenticated(chatId)) {
+                    sendMessage(chatId, "✅ Вы уже вошли в систему. Для выхода используйте /logout");
+                } else {
+                    registrationService.startRegistration(chatId);
+                }
+                break;
+            case "/login":
+            case "🔐 Вход":
+                if (authService.isAuthenticated(chatId)) {
+                    sendMessage(chatId, "✅ Вы уже вошли в систему. Для выхода используйте /logout");
+                } else {
+                    loginService.startLoginProcess(chatId);
+                    sendMessage(chatId, "🔐 Вход в систему\n\nПожалуйста, введите ваш email:");
+                }
+                break;
+            case "/admin":
+            case "👨‍💼 Админ":
+                handleAdminLogin(chatId);
+                break;
+            case "/profile":
+            case "👤 Профиль":
+                showUserProfile(chatId);
+                break;
+            case "/new_order":
+            case "📦 Новый заказ":
+                handleNewOrder(chatId);
+                break;
+            case "/my_orders":
+            case "📋 Мои заказы":
+                showUserOrders(chatId);
+                break;
+            case "ℹ️ О боте":
+                sendAboutMessage(chatId);
+                break;
+            case "❌ Отмена":
+                handleCancel(chatId);
+                break;
+            default:
+                sendDefaultMessage(chatId);
+                break;
+        }
+    }
+
+    // Обновите метод handleCancel
+    private void handleCancel(Long chatId) {
+        if (adminService.isAdminInLoginProcess(chatId)) {
+            adminService.cancelAdminLogin(chatId);
+            sendMessage(chatId, "❌ Вход администратора отменен.");
+        } else if (adminActionState.containsKey(chatId)) {
+            adminActionState.remove(chatId);
+            sendMessage(chatId, "❌ Действие администратора отменено.");
+        } else if (registrationService.isUserInRegistrationProcess(chatId)) {
+            registrationService.cancelRegistration(chatId);
+            sendMessage(chatId, "❌ Регистрация отменена.");
+        } else if (loginService.isUserInLoginProcess(chatId)) {
+            loginService.cancelLoginProcess(chatId);
+            sendMessage(chatId, "❌ Вход отменен.");
+        } else if (orderCreationService.isUserInOrderCreationProcess(chatId)) {
+            orderCreationService.cancelOrderCreation(chatId);
+            sendMessage(chatId, "❌ Создание заказа отменено.");
+        } else {
+            sendMessage(chatId, "❌ Нечего отменять.");
+        }
+    }
+
+    // Обновите метод createMainMenuKeyboard
+    private ReplyKeyboardMarkup createMainMenuKeyboard(Long chatId) {
+        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
+        keyboardMarkup.setSelective(true);
+        keyboardMarkup.setResizeKeyboard(true);
+        keyboardMarkup.setOneTimeKeyboard(false);
+
+        List<KeyboardRow> keyboard = new ArrayList<>();
+
+        if (adminService.isAdminAuthenticated(chatId)) {
+            // Меню для администратора
+            KeyboardRow row1 = new KeyboardRow();
+            row1.add("📋 Все заказы");
+            row1.add("🚗 Весь транспорт");
+
+            KeyboardRow row2 = new KeyboardRow();
+            row2.add("✏️ Изменить статус заказа");
+            row2.add("🔄 Изменить статус транспорта");
+
+            KeyboardRow row3 = new KeyboardRow();
+            row3.add("🚪 Выход");
+
+            keyboard.add(row1);
+            keyboard.add(row2);
+            keyboard.add(row3);
+        } else if (authService.isAuthenticated(chatId)) {
+            // Меню для авторизованных пользователей
+            KeyboardRow row1 = new KeyboardRow();
+            row1.add("📦 Новый заказ");
+            row1.add("📋 Мои заказы");
+
+            KeyboardRow row2 = new KeyboardRow();
+            row2.add("👤 Профиль");
+            row2.add("❓ Помощь");
+
+            KeyboardRow row3 = new KeyboardRow();
+            row3.add("ℹ️ О боте");
+            row3.add("🚪 Выход");
+
+            keyboard.add(row1);
+            keyboard.add(row2);
+            keyboard.add(row3);
+        } else {
+            // Меню для неавторизованных пользователей
+            KeyboardRow row1 = new KeyboardRow();
+            row1.add("📝 Регистрация");
+            row1.add("🔐 Вход");
+            row1.add("👨‍💼 Админ");
+
+            KeyboardRow row2 = new KeyboardRow();
+            row2.add("❓ Помощь");
+            row2.add("ℹ️ О боте");
+
+            KeyboardRow row3 = new KeyboardRow();
+            row3.add("📊 Статус сессии");
+            row3.add("🚀 Старт");
+
+            keyboard.add(row1);
+            keyboard.add(row2);
+            keyboard.add(row3);
+        }
+
+        keyboardMarkup.setKeyboard(keyboard);
+        return keyboardMarkup;
+    }
+
+    // Обновите метод sendWelcomeMessage
+    private void sendWelcomeMessage(Long chatId) {
+        String welcomeText = "👋 Добро пожаловать в Logistics Bot!\n\n" +
+                "✅ Сессия начата! Вы можете работать в течение 30 минут.\n\n" +
+                "Я помогу вам управлять логистикой и доставками.\n\n";
+
+        if (adminService.isAdminAuthenticated(chatId)) {
+            welcomeText += "✅ Вы вошли как: АДМИНИСТРАТОР\n\n";
+        } else if (authService.isAuthenticated(chatId)) {
+            Customer customer = authService.getAuthenticatedCustomer(chatId);
+            welcomeText += "✅ Вы вошли как: " + customer.getFullName() + "\n\n";
+        } else {
+            welcomeText += "🔐 Для доступа к функциям войдите в систему или зарегистрируйтесь.\n\n";
+        }
+
+        welcomeText += "Выберите действие из меню ниже:";
+
+        sendMessageWithMenu(chatId, welcomeText);
     }
 
 
@@ -205,23 +650,6 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private void sendWelcomeMessage(Long chatId) {
-        String welcomeText = "👋 Добро пожаловать в Logistics Bot!\n\n" +
-                "✅ Сессия начата! Вы можете работать в течение 30 минут.\n\n" +
-                "Я помогу вам управлять логистикой и доставками.\n\n";
-
-        if (authService.isAuthenticated(chatId)) {
-            Customer customer = authService.getAuthenticatedCustomer(chatId);
-            welcomeText += "✅ Вы вошли как: " + customer.getFullName() + "\n\n";
-        } else {
-            welcomeText += "🔐 Для доступа к функциям войдите в систему или зарегистрируйтесь.\n\n";
-        }
-
-        welcomeText += "Выберите действие из меню ниже:";
-
-        sendMessageWithMenu(chatId, welcomeText);
-    }
-
     // Обновляем метод sendHelpMessage:
     private void sendHelpMessage(Long chatId) {
         String helpText = "📋 Доступные команды:\n\n";
@@ -248,94 +676,6 @@ public class TelegramBot extends TelegramLongPollingBot {
         sendMessageWithMenu(chatId, helpText);
     }
 
-    // Обновите метод processMessage
-    private void processMessage(String text, Long chatId) {
-        // Проверяем команды выхода и статуса сессии
-        if ("/logout".equals(text) || "🚪 Выход".equals(text)) {
-            handleLogout(chatId);
-            return;
-        }
-
-        if ("/session".equals(text) || "📊 Статус сессии".equals(text)) {
-            showSessionStatus(chatId);
-            return;
-        }
-
-        // Проверяем активна ли сессия (кроме команды /start)
-        if (!"/start".equals(text) && !"🚀 Старт".equals(text)) {
-            if (!sessionService.isSessionActive(chatId)) {
-                sendSessionExpiredMessage(chatId);
-                return;
-            }
-        }
-
-        // Проверяем процессы (в порядке приоритета)
-        if (registrationService.isUserInRegistrationProcess(chatId)) {
-            registrationService.processInput(chatId, text);
-        } else if (loginService.isUserInLoginProcess(chatId)) {
-            String response = loginService.processLoginInput(chatId, text);
-            sendMessage(chatId, response);
-        } else if (orderCreationService.isUserInOrderCreationProcess(chatId)) {
-            String response = orderCreationService.processOrderCreationInput(chatId, text);
-            sendMessage(chatId, response);
-        } else {
-            // Обрабатываем команды и кнопки
-            handleCommands(text, chatId);
-        }
-    }
-
-    // Обновите метод handleCommands - добавьте новые команды
-    private void handleCommands(String text, Long chatId) {
-        switch (text) {
-            case "/start":
-            case "🚀 Старт":
-                startSession(chatId);
-                sendWelcomeMessage(chatId);
-                break;
-            case "/help":
-            case "❓ Помощь":
-                sendHelpMessage(chatId);
-                break;
-            case "/sign":
-            case "📝 Регистрация":
-                if (authService.isAuthenticated(chatId)) {
-                    sendMessage(chatId, "✅ Вы уже вошли в систему. Для выхода используйте /logout");
-                } else {
-                    registrationService.startRegistration(chatId);
-                }
-                break;
-            case "/login":
-            case "🔐 Вход":
-                if (authService.isAuthenticated(chatId)) {
-                    sendMessage(chatId, "✅ Вы уже вошли в систему. Для выхода используйте /logout");
-                } else {
-                    loginService.startLoginProcess(chatId);
-                    sendMessage(chatId, "🔐 Вход в систему\n\nПожалуйста, введите ваш email:");
-                }
-                break;
-            case "/profile":
-            case "👤 Профиль":
-                showUserProfile(chatId);
-                break;
-            case "/new_order":
-            case "📦 Новый заказ":
-                handleNewOrder(chatId);
-                break;
-            case "/my_orders":
-            case "📋 Мои заказы":
-                showUserOrders(chatId);
-                break;
-            case "ℹ️ О боте":
-                sendAboutMessage(chatId);
-                break;
-            case "❌ Отмена":
-                handleCancel(chatId);
-                break;
-            default:
-                sendDefaultMessage(chatId);
-                break;
-        }
-    }
 
     private void handleNewOrder(Long chatId) {
         if (!authService.isAuthenticated(chatId)) {
@@ -380,68 +720,5 @@ public class TelegramBot extends TelegramLongPollingBot {
         sendMessage(chatId, ordersText.toString());
     }
 
-    // Обновите метод handleCancel
-    private void handleCancel(Long chatId) {
-        if (registrationService.isUserInRegistrationProcess(chatId)) {
-            registrationService.cancelRegistration(chatId);
-            sendMessage(chatId, "❌ Регистрация отменена.");
-        } else if (loginService.isUserInLoginProcess(chatId)) {
-            loginService.cancelLoginProcess(chatId);
-            sendMessage(chatId, "❌ Вход отменен.");
-        } else if (orderCreationService.isUserInOrderCreationProcess(chatId)) {
-            orderCreationService.cancelOrderCreation(chatId);
-            sendMessage(chatId, "❌ Создание заказа отменено.");
-        } else {
-            sendMessage(chatId, "❌ Нечего отменять.");
-        }
-    }
 
-    // Обновите метод createMainMenuKeyboard для авторизованных пользователей
-    private ReplyKeyboardMarkup createMainMenuKeyboard(Long chatId) {
-        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
-        keyboardMarkup.setSelective(true);
-        keyboardMarkup.setResizeKeyboard(true);
-        keyboardMarkup.setOneTimeKeyboard(false);
-
-        List<KeyboardRow> keyboard = new ArrayList<>();
-
-        if (authService.isAuthenticated(chatId)) {
-            // Меню для авторизованных пользователей
-            KeyboardRow row1 = new KeyboardRow();
-            row1.add("📦 Новый заказ");
-            row1.add("📋 Мои заказы");
-
-            KeyboardRow row2 = new KeyboardRow();
-            row2.add("👤 Профиль");
-            row2.add("❓ Помощь");
-
-            KeyboardRow row3 = new KeyboardRow();
-            row3.add("ℹ️ О боте");
-            row3.add("🚪 Выход");
-
-            keyboard.add(row1);
-            keyboard.add(row2);
-            keyboard.add(row3);
-        } else {
-            // Меню для неавторизованных пользователей
-            KeyboardRow row1 = new KeyboardRow();
-            row1.add("📝 Регистрация");
-            row1.add("🔐 Вход");
-
-            KeyboardRow row2 = new KeyboardRow();
-            row2.add("❓ Помощь");
-            row2.add("ℹ️ О боте");
-
-            KeyboardRow row3 = new KeyboardRow();
-            row3.add("📊 Статус сессии");
-            row3.add("🚀 Старт");
-
-            keyboard.add(row1);
-            keyboard.add(row2);
-            keyboard.add(row3);
-        }
-
-        keyboardMarkup.setKeyboard(keyboard);
-        return keyboardMarkup;
-    }
 }

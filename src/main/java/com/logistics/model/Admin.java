@@ -15,6 +15,6 @@ public class Admin {
     @Column(name = "admin_id")
     private Integer customerId;
 
-    @Column(name = "hash_password")
+    @Column(name = "password_hash")
     private String hashPassword;
 }
